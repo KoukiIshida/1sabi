@@ -27,8 +27,6 @@
     .q-head .q-head-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .q-body { display:none; padding:16px; border-top:2px solid #cbd5e1; }
     .q-body.open { display:block; }
-    .choice-admin-row { display:flex; align-items:center; gap:6px; margin:4px 0; }
-    .choice-admin-row input[type=text] { flex:1; }
     .field-label { font-weight:bold; display:block; margin:10px 0 4px; }
     .lyric-box { background:#000; color:#fff; border-radius:10px; padding:14px 16px; min-height:90px; font-size:17px; line-height:1.7; white-space:pre-wrap; text-align:center; letter-spacing:1px; }
     .lyric-box .ch.hidden { color:transparent; }
@@ -246,7 +244,6 @@ async function loadFromDB(key) {
     });
 }
 
-const CHOICE_COUNT = 9;
 const RANK_BONUS = [5, 3, 1];
 
 let appData = { ruleText: '', ruleImg: null, testAudio: null, questions: [] };
@@ -264,11 +261,12 @@ function fileToBase64(file) {
 function createEmptyQuestion() {
     return {
         title: '', artist: '',
-        choices: Array.from({ length: CHOICE_COUNT }, () => ''),
+        choices: [],
         correct: [],
         lyricsText: '',
         audio: null,
         msPerChar: 180,
+        startOffsetMs: 0,
         include: true, done: false
     };
 }
@@ -387,13 +385,13 @@ function buildQuestionBlock(q, idx) {
             <input type="text" id="q-artist-${idx}" value="${escAttr(q.artist)}" style="width:100%;">
         </label>
 
-        <div class="field-label">9個の選択肢（左のチェックが正解）</div>
-        ${Array.from({ length: CHOICE_COUNT }).map((_, n) => `
-            <div class="choice-admin-row">
-                <input type="checkbox" id="q-c-correct-${idx}-${n}" ${q.correct.includes(n) ? 'checked' : ''}>
-                <input type="text" id="q-c-text-${idx}-${n}" value="${escAttr(q.choices[n] || '')}" placeholder="選択肢${n + 1}" maxlength="10">
-            </div>
-        `).join('')}
+        <label class="field-label">9個の選択肢（カンマ区切りで入力。例: 夢,光,ホコリ,雨,幸せ,レモン,過去,暗闇,涙）
+            <input type="text" id="q-choices-${idx}" value="${escAttr((q.choices || []).join(','))}" style="width:100%;">
+        </label>
+        <label class="field-label">正解（カンマ区切りで入力。上の選択肢と同じ表記にしてください。例: 光,雨,レモン）
+            <input type="text" id="q-correct-${idx}" value="${escAttr((q.correct || []).map(i => q.choices[i]).filter(Boolean).join(','))}" style="width:100%;">
+        </label>
+        <div id="q-correct-warn-${idx}" style="color:var(--ng); font-size:13px;"></div>
 
         <label class="field-label">歌詞（正解の単語がこの中に含まれている必要があります）
             <textarea id="q-lyrics-${idx}" rows="5">${escHtml(q.lyricsText)}</textarea>
@@ -406,6 +404,9 @@ function buildQuestionBlock(q, idx) {
 
         <label class="field-label">歌詞の表示速度（1文字あたり ms。小さいほど速い）
             <input type="number" id="q-speed-${idx}" value="${q.msPerChar}" min="30" max="1000" step="10" style="width:100px;">
+        </label>
+        <label class="field-label">1文字目が表示されるタイミング（音源再生開始から何秒後か）
+            <input type="number" id="q-startoffset-${idx}" value="${((q.startOffsetMs || 0) / 1000)}" min="0" max="120" step="0.1" style="width:100px;">秒
         </label>
         <button type="button" onclick="testPlayQuestion(${idx})">▶ テスト再生</button>
         <div id="q-test-preview-${idx}"></div>
@@ -455,18 +456,37 @@ function syncQuestionFromForm(idx) {
     q.msPerChar = parseInt(document.getElementById(`q-speed-${idx}`).value) || 180;
     q.include = document.getElementById(`q-include-${idx}`).checked;
     q.done = document.getElementById(`q-done-${idx}`).checked;
-    q.correct = [];
-    for (let n = 0; n < CHOICE_COUNT; n++) {
-        q.choices[n] = document.getElementById(`q-c-text-${idx}-${n}`).value;
-        if (document.getElementById(`q-c-correct-${idx}-${n}`).checked) q.correct.push(n);
-    }
+    q.startOffsetMs = Math.round((parseFloat(document.getElementById(`q-startoffset-${idx}`).value) || 0) * 1000);
+
+    q.choices = document.getElementById(`q-choices-${idx}`).value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    const correctWords = document.getElementById(`q-correct-${idx}`).value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    const notFound = [];
+    const correctSet = new Set();
+    correctWords.forEach(w => {
+        const foundIdx = q.choices.indexOf(w);
+        if (foundIdx === -1) notFound.push(w);
+        else correctSet.add(foundIdx);
+    });
+    q.correct = [...correctSet];
+    const warnEl = document.getElementById(`q-correct-warn-${idx}`);
+    if (warnEl) warnEl.innerText = notFound.length ? `⚠ 選択肢に見つからない正解: ${notFound.join('、')}` : '';
+
     const audioFile = document.getElementById(`q-audio-${idx}`).files[0];
     if (audioFile) q.audio = audioFile;
+    return notFound;
 }
 
 async function saveAllData() {
     appData.ruleText = document.getElementById('rule-editor').innerHTML;
-    for (let idx = 0; idx < appData.questions.length; idx++) syncQuestionFromForm(idx);
+    const problems = [];
+    for (let idx = 0; idx < appData.questions.length; idx++) {
+        const notFound = syncQuestionFromForm(idx);
+        if (notFound.length) problems.push(`問${idx + 1}: ${notFound.join('、')}`);
+    }
+    if (problems.length) {
+        alert('以下の正解が選択肢に見つからないため反映されていません。選択肢の表記と正解の表記を確認してください。\n\n' + problems.join('\n'));
+        return;
+    }
     await saveToDB('lyricQuizMasterData', appData);
     alert('保存しました。ホスト画面に移動します。');
     window.location.href = window.location.pathname;
@@ -509,13 +529,13 @@ function renderLyricSpans(container, chars) {
     });
 }
 
-function startLyricPlayback(container, audioEl, meta, onHighlight, onEnded) {
+function startLyricPlayback(container, audioEl, meta, startOffsetMs, onHighlight, onEnded) {
     const spans = container.querySelectorAll('.ch');
     let eventPtr = 0;
     let raf = null;
     function tick() {
-        const elapsedMs = audioEl.currentTime * 1000;
-        const visibleCount = Math.min(meta.chars.length, Math.floor(elapsedMs / (meta.msPerChar || 1)));
+        const adjustedMs = audioEl.currentTime * 1000 - (startOffsetMs || 0);
+        const visibleCount = adjustedMs <= 0 ? 0 : Math.min(meta.chars.length, Math.floor(adjustedMs / (meta.msPerChar || 1)));
         for (let i = 0; i < visibleCount; i++) {
             const span = spans[i];
             if (span.classList.contains('hidden')) {
@@ -523,7 +543,7 @@ function startLyricPlayback(container, audioEl, meta, onHighlight, onEnded) {
                 if (meta.isCorrect[i]) span.classList.add('correct');
             }
         }
-        while (eventPtr < meta.events.length && meta.events[eventPtr].time <= elapsedMs) {
+        while (eventPtr < meta.events.length && meta.events[eventPtr].time <= adjustedMs) {
             if (onHighlight) onHighlight(meta.events[eventPtr].choiceIdx);
             eventPtr++;
         }
@@ -549,7 +569,7 @@ function testPlayQuestion(idx) {
     renderLyricSpans(box, meta.chars);
 
     const audioEl = new Audio(URL.createObjectURL(q.audio));
-    startLyricPlayback(box, audioEl, meta, null, null);
+    startLyricPlayback(box, audioEl, meta, q.startOffsetMs, null, null);
 }
 
 /** ========================================================
@@ -814,7 +834,7 @@ function playRevealAudio() {
     if (!currentQ.audio) { alert('音源が登録されていません。'); return; }
     const box = document.getElementById('hr-lyric-box');
     revealAudioEl = new Audio(URL.createObjectURL(currentQ.audio));
-    startLyricPlayback(box, revealAudioEl, currentQMeta,
+    startLyricPlayback(box, revealAudioEl, currentQMeta, currentQ.startOffsetMs,
         (choiceIdx) => {
             revealOrder.forEach(({ key, p }) => {
                 if (p.selected.includes(choiceIdx)) {
