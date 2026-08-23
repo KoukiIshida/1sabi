@@ -56,6 +56,10 @@
     #video-play-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.35); color:#fff; font-size:22px; font-weight:bold; cursor:pointer; border-radius:10px; }
     .lyric-wrap { position:relative; }
     small.dim { color:#666; }
+    .wysiwyg-toolbar { display:flex; gap:5px; margin-bottom:5px; background:#e9e3f7; padding:6px; border-radius:6px; flex-wrap:wrap; }
+    .editor { border:2px solid #cbd5e1; min-height:80px; padding:10px; border-radius:6px; overflow-y:auto; margin-bottom:12px; background:#fff; }
+    .rule-display { padding:15px; border:1px solid #ccc; background:#fff; border-radius:6px; min-height:40px; }
+    .rule-display img, #host-rule-img img, #player-rule-img img { max-width:100%; max-height:280px; }
 </style>
 </head>
 <body>
@@ -64,9 +68,21 @@
 <div id="admin-page" class="page">
     <h1>歌詞当てクイズ 管理者画面</h1>
 
+    <h3>ルール説明の登録</h3>
+    <div class="wysiwyg-toolbar">
+        <button type="button" onclick="document.execCommand('bold', false, null)">太字</button>
+        <button type="button" onclick="document.execCommand('foreColor', false, '#ff0000')"><span style="color:#ffdfe4;">赤字</span></button>
+        <button type="button" onclick="document.execCommand('foreColor', false, '#000000')">黒字</button>
+        <button type="button" onclick="document.execCommand('fontSize', false, '5')">大文字</button>
+        <button type="button" onclick="document.execCommand('fontSize', false, '3')">標準文字</button>
+    </div>
+    <div id="rule-editor" class="editor" contenteditable="true"></div>
+    <label>ルール説明用画像: <input type="file" id="rule-image-upload" accept="image/*"></label>
+    <span id="rule-image-status"></span>
+
     <h3>テスト用音源（音量確認用）</h3>
-    <p><small class="dim">ホストのQR待機画面で音量確認ボタンから再生されます。</small></p>
-    <input type="file" id="test-audio-upload" accept="audio/*">
+    <p><small class="dim">ホストのQR待機画面で音量確認ボタンから再生されます。mp4動画ファイルを選んだ場合も音声のみが使われます（映像は表示されません）。</small></p>
+    <input type="file" id="test-audio-upload" accept="audio/*,video/mp4,video/*">
     <span id="test-audio-status"></span>
 
     <h3>問題一覧</h3>
@@ -89,14 +105,36 @@
     <div id="player-list-box"></div>
     <hr>
     <div style="text-align:center;">
-        <button onclick="startGameFlow()" style="font-size:20px; padding:12px 30px;">ゲーム開始</button>
+        <button onclick="goToFinalConfirm()" style="font-size:20px; padding:12px 30px;">ゲーム開始</button>
         <button class="secondary" onclick="forceNewRoom()">🆕 新しい部屋を作り直す</button>
+        <button class="secondary" onclick="goToAdminFromHost()">⚙ 管理画面に戻る</button>
+    </div>
+</div>
+
+<!-- =============== ホスト: 出題設定 最終確認 =============== -->
+<div id="host-confirm" class="page">
+    <h2>出題設定 最終確認</h2>
+    <div id="hc-list"></div>
+    <div style="text-align:center; margin-top:16px;">
+        <button onclick="goToRuleScreen()" style="font-size:20px; padding:12px 30px;">この内容で開始</button>
+        <button class="secondary" onclick="showPage('host-qr')">戻る</button>
+    </div>
+</div>
+
+<!-- =============== ホスト: ルール説明 =============== -->
+<div id="host-rule" class="page">
+    <h2>📋 ルール説明</h2>
+    <div id="host-rule-content" class="rule-display"></div>
+    <div id="host-rule-img" style="text-align:center; margin-top:10px;"></div>
+    <div style="text-align:center; margin-top:20px;">
+        <button onclick="goToFirstQuestion()" style="font-size:20px; padding:12px 30px;">問題へ進む（例題から）</button>
     </div>
 </div>
 
 <!-- =============== ホスト: 出題画面 =============== -->
 <div id="host-question" class="page">
     <h2 id="hq-progress"></h2>
+    <div id="hq-example-badge" style="display:none; text-align:center; color:#ec4899; font-weight:bold; font-size:15px;">📝 例題（得点は加算されません）</div>
     <div style="text-align:center; padding:30px 10px;">
         <div id="hq-title" style="font-size:44px; font-weight:900; color:var(--primary-dark);"></div>
         <div id="hq-artist" style="font-size:26px; font-weight:bold; color:#555; margin-top:6px;"></div>
@@ -126,6 +164,7 @@
 <!-- =============== ホスト: 順位発表（各問） =============== -->
 <div id="host-rank" class="page">
     <h2>順位発表</h2>
+    <div id="hrank-example-note" style="display:none; text-align:center; color:#ec4899; font-weight:bold; margin-bottom:10px;">📝 例題のため得点は加算されません</div>
     <div id="hrank-top3"></div>
     <div id="hrank-rest"></div>
     <div style="text-align:center; margin-top:20px;" id="hrank-next-box"></div>
@@ -144,6 +183,14 @@
     <p style="text-align:center;">ニックネームを入力してください。</p>
     <input type="text" id="player-name-input" placeholder="ニックネーム" style="width:100%; font-size:18px; text-align:center;">
     <button onclick="joinGame()" style="width:100%; font-size:18px; padding:12px;">参加する</button>
+</div>
+
+<!-- =============== 参加者: ルール説明 =============== -->
+<div id="player-rule" class="page">
+    <h2>📋 ルール説明</h2>
+    <div id="player-rule-content" class="rule-display"></div>
+    <div id="player-rule-img" style="text-align:center; margin-top:10px;"></div>
+    <p style="text-align:center; color:#64748b; margin-top:16px;">ホストの指示があるまでお待ちください。</p>
 </div>
 
 <!-- =============== 参加者: 待機 =============== -->
@@ -202,7 +249,17 @@ async function loadFromDB(key) {
 const CHOICE_COUNT = 9;
 const RANK_BONUS = [5, 3, 1];
 
-let appData = { testAudio: null, questions: [] };
+let appData = { ruleText: '', ruleImg: null, testAudio: null, questions: [] };
+
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        if (!file) return resolve(null);
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
 
 function createEmptyQuestion() {
     return {
@@ -255,6 +312,8 @@ window.onload = async () => {
     const saved = await loadFromDB('lyricQuizMasterData');
     if (saved) appData = saved;
     if (!appData.questions) appData.questions = [];
+    if (appData.ruleText === undefined) appData.ruleText = '';
+    if (appData.ruleImg === undefined) appData.ruleImg = null;
 
     requestWakeLock();
 
@@ -279,6 +338,13 @@ window.onload = async () => {
 function fileToBlob(file) { return file || null; }
 
 function renderAdminPage() {
+    document.getElementById('rule-editor').innerHTML = appData.ruleText || '';
+    document.getElementById('rule-image-status').innerText = appData.ruleImg ? '✓ 登録済み' : '未登録';
+    document.getElementById('rule-image-upload').onchange = async (e) => {
+        const f = e.target.files[0];
+        if (f) { appData.ruleImg = await fileToBase64(f); document.getElementById('rule-image-status').innerText = '✓ 登録済み（未保存）'; }
+    };
+
     const testStatus = document.getElementById('test-audio-status');
     testStatus.innerText = appData.testAudio ? '✓ 登録済み' : '未登録';
     document.getElementById('test-audio-upload').onchange = (e) => {
@@ -333,8 +399,8 @@ function buildQuestionBlock(q, idx) {
             <textarea id="q-lyrics-${idx}" rows="5">${escHtml(q.lyricsText)}</textarea>
         </label>
 
-        <label class="field-label">音源ファイル
-            <input type="file" id="q-audio-${idx}" accept="audio/*">
+        <label class="field-label">音源ファイル（mp4動画ファイルを選んだ場合も音声のみ使用されます）
+            <input type="file" id="q-audio-${idx}" accept="audio/*,video/mp4,video/*">
             <span id="q-audio-status-${idx}">${q.audio ? '✓ 登録済み' : '未登録'}</span>
         </label>
 
@@ -399,6 +465,7 @@ function syncQuestionFromForm(idx) {
 }
 
 async function saveAllData() {
+    appData.ruleText = document.getElementById('rule-editor').innerHTML;
     for (let idx = 0; idx < appData.questions.length; idx++) syncQuestionFromForm(idx);
     await saveToDB('lyricQuizMasterData', appData);
     alert('保存しました。ホスト画面に移動します。');
@@ -627,8 +694,31 @@ function toggleVolumeCheck() {
 /** ========================================================
  * ゲーム進行
  * ======================================================== */
-function startGameFlow() {
+function goToAdminFromHost() {
+    if (!confirm('管理画面に戻ります。現在の参加者との接続は切断されます。よろしいですか？')) return;
+    window.location.href = window.location.pathname + '?mode=admin';
+}
+
+function goToFinalConfirm() {
     if (!selectedQuestions.length) { alert('出題対象の問題がありません。管理画面で「出題する」にチェックを入れてください。'); return; }
+    const list = document.getElementById('hc-list');
+    list.innerHTML = selectedQuestions.map((q, i) => `
+        <div class="rank-row">
+            <span>${i + 1}. ${q.title || '(無題)'} ${i === 0 ? '<strong style="color:#ec4899;">（例題・得点加算なし）</strong>' : ''}</span>
+            <span>${q.artist || ''}</span>
+        </div>
+    `).join('');
+    showPage('host-confirm');
+}
+
+function goToRuleScreen() {
+    document.getElementById('host-rule-content').innerHTML = appData.ruleText || '(ルール説明は登録されていません)';
+    document.getElementById('host-rule-img').innerHTML = appData.ruleImg ? `<img src="${appData.ruleImg}">` : '';
+    broadcast('show_rule', { ruleText: appData.ruleText, ruleImg: appData.ruleImg });
+    showPage('host-rule');
+}
+
+function goToFirstQuestion() {
     setupQuestion(currentQuestionIndex);
 }
 
@@ -640,6 +730,7 @@ function setupQuestion(idx) {
     Object.values(playersData).forEach(p => { p.submitted = false; p.selected = []; p.answerTimeMs = null; });
 
     document.getElementById('hq-progress').innerText = `第 ${idx + 1} 問 / 全 ${selectedQuestions.length} 問`;
+    document.getElementById('hq-example-badge').style.display = (idx === 0) ? 'block' : 'none';
     document.getElementById('hq-title').innerText = currentQ.title || '(無題)';
     document.getElementById('hq-artist').innerText = currentQ.artist || '';
     updateSubmitStatusUI();
@@ -777,20 +868,24 @@ function hostGoToRanking() {
     let boundaryFlag = false;
     if (top3.length === 3 && restRanked.length > 0 && top3[2].raw === restRanked[0].raw) boundaryFlag = true;
 
-    // スコア確定を反映
-    [...top3, ...restRanked].forEach(s => {
-        const p = playersData[s.key];
-        p.totalScore += s.total;
-        p.history.push(s.total);
-    });
+    const isExample = currentQuestionIndex === 0;
+    // スコア確定を反映（例題は加算しない）
+    if (!isExample) {
+        [...top3, ...restRanked].forEach(s => {
+            const p = playersData[s.key];
+            p.totalScore += s.total;
+            p.history.push(s.total);
+        });
+    }
     if (currentQ) currentQ.done = true;
     persistState();
 
-    renderQuestionRanking(top3, restRanked, boundaryFlag);
+    renderQuestionRanking(top3, restRanked, boundaryFlag, isExample);
     showPage('host-rank');
 }
 
-function renderQuestionRanking(top3, restRanked, boundaryFlag) {
+function renderQuestionRanking(top3, restRanked, boundaryFlag, isExample) {
+    document.getElementById('hrank-example-note').style.display = isExample ? 'block' : 'none';
     const top3Box = document.getElementById('hrank-top3');
     top3Box.innerHTML = '<h3>上位3名</h3>';
     // 3位から発表: 表示は1位→3位の順に並べるが要求は「上から1位2位3位」
@@ -831,7 +926,15 @@ function renderQuestionRanking(top3, restRanked, boundaryFlag) {
     const nextBox = document.getElementById('hrank-next-box');
     nextBox.innerHTML = '';
     const btn = document.createElement('button');
-    if (currentQuestionIndex + 1 < selectedQuestions.length) {
+    if (isExample) {
+        btn.innerText = '🎬 本番を開始する（全員の得点をリセット）';
+        btn.style.background = '#ec4899';
+        btn.onclick = () => {
+            Object.values(playersData).forEach(p => { p.totalScore = 0; p.history = []; });
+            persistState();
+            setupQuestion(1);
+        };
+    } else if (currentQuestionIndex + 1 < selectedQuestions.length) {
         btn.innerText = '次の問題へ';
         btn.onclick = () => setupQuestion(currentQuestionIndex + 1);
     } else {
@@ -949,6 +1052,10 @@ function handlePlayerMessage(data) {
         mySubmitted = false;
         renderPlayerChoices(data.choices);
         showPage('player-answer');
+    } else if (data.type === 'show_rule') {
+        document.getElementById('player-rule-content').innerHTML = data.ruleText || '';
+        document.getElementById('player-rule-img').innerHTML = data.ruleImg ? `<img src="${data.ruleImg}">` : '';
+        showPage('player-rule');
     }
 }
 
