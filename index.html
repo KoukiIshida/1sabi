@@ -47,6 +47,11 @@
     .chip-mini { background:#e2e8f0; border-radius:8px; padding:1px 6px; font-size:11px; }
     .chip-mini.lit { background:#facc15; color:#000; box-shadow:0 0 8px 2px #f59e0b; }
     .p-tile.all-correct { box-shadow:0 0 14px 4px var(--ok); border-color:var(--ok); background:#f0fdf4; }
+    @keyframes flash-all-correct {
+        0%, 100% { box-shadow:0 0 14px 4px var(--ok); border-color:var(--ok); background:#f0fdf4; }
+        50% { box-shadow:none; border-color:#cbd5e1; background:#fafafa; }
+    }
+    .p-tile.all-correct-flash { animation: flash-all-correct 0.3s ease-in-out 4; }
     .status-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:bold; }
     .status-badge.done { background:#dcfce7; color:#166534; }
     .status-badge.pending { background:#fee2e2; color:#991b1b; }
@@ -108,19 +113,9 @@
     <div id="player-list-box"></div>
     <hr>
     <div style="text-align:center;">
-        <button onclick="goToFinalConfirm()" style="font-size:20px; padding:12px 30px;">ゲーム開始</button>
+        <button onclick="startGameSequence()" style="font-size:20px; padding:12px 30px;">ゲーム開始</button>
         <button class="secondary" onclick="forceNewRoom()">🆕 新しい部屋を作り直す</button>
         <button class="secondary" onclick="goToAdminFromHost()">⚙ 管理画面に戻る</button>
-    </div>
-</div>
-
-<!-- =============== ホスト: 出題設定 最終確認 =============== -->
-<div id="host-confirm" class="page">
-    <h2>出題設定 最終確認</h2>
-    <div id="hc-list"></div>
-    <div style="text-align:center; margin-top:16px;">
-        <button onclick="goToRuleScreen()" style="font-size:20px; padding:12px 30px;">この内容で開始</button>
-        <button class="secondary" onclick="showPage('host-qr')">戻る</button>
     </div>
 </div>
 
@@ -143,8 +138,10 @@
         <div id="hq-artist" style="font-size:26px; font-weight:bold; color:#555; margin-top:6px;"></div>
     </div>
     <div style="text-align:center;">
+        <div id="hq-countdown" style="font-size:32px; font-weight:900; color:#ec4899; margin-bottom:8px;"></div>
         <div id="hq-submit-status" style="font-size:18px; font-weight:bold; margin-bottom:10px;"></div>
         <button id="btn-start-answer" onclick="hostStartAnswer()" style="font-size:20px; padding:14px 30px;">解答開始</button>
+        <button id="btn-close-answer" class="secondary" onclick="hostCloseAnswer()" disabled>解答締切</button>
         <button class="secondary" onclick="hostShowUnsubmitted()">未提出者確認</button>
         <button onclick="hostGoToReveal()" style="background:#ec4899;">解答確認・正解発表へ</button>
     </div>
@@ -677,7 +674,11 @@ let roomID = '';
 let selectedQuestions = [];
 let currentQuestionIndex = 0;
 let answerRoundActive = false;
+let answerRoundClosed = false;
 let answerRoundStartTime = 0;
+let countdownInterval = null;
+let countdownRemaining = 0;
+const ANSWER_TIME_LIMIT_SEC = 45;
 let revealOrder = [];
 let currentQMeta = null;
 let currentQ = null;
@@ -814,16 +815,9 @@ function goToAdminFromHost() {
     window.location.href = window.location.pathname + '?mode=admin';
 }
 
-function goToFinalConfirm() {
+function startGameSequence() {
     if (!selectedQuestions.length) { alert('出題対象の問題がありません。管理画面で「出題する」にチェックを入れてください。'); return; }
-    const list = document.getElementById('hc-list');
-    list.innerHTML = selectedQuestions.map((q, i) => `
-        <div class="rank-row">
-            <span>${i + 1}. ${q.title || '(無題)'} ${i === 0 ? '<strong style="color:#ec4899;">（例題・得点加算なし）</strong>' : ''}</span>
-            <span>${q.artist || ''}</span>
-        </div>
-    `).join('');
-    showPage('host-confirm');
+    goToRuleScreen();
 }
 
 function goToRuleScreen() {
@@ -842,12 +836,25 @@ function setupQuestion(idx) {
     currentQuestionIndex = idx;
     currentQ = selectedQuestions[idx];
     answerRoundActive = false;
+    answerRoundClosed = false;
     Object.values(playersData).forEach(p => { p.submitted = false; p.selected = []; p.answerTimeMs = null; });
 
-    document.getElementById('hq-progress').innerText = `第 ${idx + 1} 問 / 全 ${selectedQuestions.length} 問`;
+    if (idx === 0) {
+        document.getElementById('hq-progress').innerText = '例題';
+    } else {
+        const realCount = selectedQuestions.length - 1; // 例題は問題数に含めない
+        const isLast = idx === selectedQuestions.length - 1;
+        document.getElementById('hq-progress').innerText = isLast
+            ? `第 ${idx} 問（最終問題）`
+            : `第 ${idx} 問 / 全 ${realCount} 問`;
+    }
     document.getElementById('hq-example-badge').style.display = (idx === 0) ? 'block' : 'none';
     document.getElementById('hq-title').innerText = currentQ.title || '(無題)';
     document.getElementById('hq-artist').innerText = currentQ.artist || '';
+    document.getElementById('btn-start-answer').disabled = false;
+    document.getElementById('btn-close-answer').disabled = true;
+    stopCountdown();
+    document.getElementById('hq-countdown').innerText = '';
     updateSubmitStatusUI();
     showPage('host-question');
     broadcast('page', { page: 'waiting', msg: '次の問題が出題されるまでお待ちください。' });
@@ -859,7 +866,9 @@ function updateSubmitStatusUI() {
     const submitted = Object.values(playersData).filter(p => p.connId && p.submitted).length;
     const el = document.getElementById('hq-submit-status');
     if (!el) return;
-    if (!answerRoundActive) {
+    if (answerRoundClosed) {
+        el.innerHTML = `<span style="color:var(--ng);">🔒 解答受付を締め切りました (${submitted}/${total})</span>`;
+    } else if (!answerRoundActive) {
         el.innerText = '（解答開始前）';
     } else if (total > 0 && submitted >= total) {
         el.innerHTML = `<span style="color:var(--ok);">✅ 全員提出済み (${submitted}/${total})</span>`;
@@ -873,6 +882,42 @@ function hostStartAnswer() {
     answerRoundStartTime = performance.now();
     Object.values(playersData).forEach(p => { p.submitted = false; p.selected = []; p.answerTimeMs = null; });
     broadcast('start_answer', { choices: currentQ.choices });
+    document.getElementById('btn-start-answer').disabled = true;
+    document.getElementById('btn-close-answer').disabled = false;
+    startCountdown(ANSWER_TIME_LIMIT_SEC);
+    updateSubmitStatusUI();
+}
+
+function startCountdown(seconds) {
+    stopCountdown();
+    countdownRemaining = seconds;
+    updateCountdownUI();
+    countdownInterval = setInterval(() => {
+        countdownRemaining--;
+        updateCountdownUI();
+        if (countdownRemaining <= 0) stopCountdown(); // 表示のみ。自動処理は行わない
+    }, 1000);
+}
+
+function stopCountdown() {
+    if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+}
+
+function updateCountdownUI() {
+    const el = document.getElementById('hq-countdown');
+    if (!el) return;
+    const remain = Math.max(0, countdownRemaining);
+    const m = Math.floor(remain / 60);
+    const s = remain % 60;
+    el.innerText = `残り時間 ${m}:${String(s).padStart(2, '0')}`;
+}
+
+function hostCloseAnswer() {
+    answerRoundActive = false;
+    answerRoundClosed = true;
+    stopCountdown();
+    document.getElementById('btn-close-answer').disabled = true;
+    broadcast('close_answer', {});
     updateSubmitStatusUI();
 }
 
@@ -951,7 +996,13 @@ function startRevealPlayback() {
                     p.selected.every(i => correctSet.includes(i));
                 if (isAllCorrect) {
                     const tile = document.getElementById(`hr-tile-${key}`);
-                    if (tile) tile.classList.add('all-correct');
+                    if (tile) {
+                        tile.classList.add('all-correct-flash');
+                        tile.addEventListener('animationend', () => {
+                            tile.classList.remove('all-correct-flash');
+                            tile.classList.add('all-correct');
+                        }, { once: true });
+                    }
                 }
             });
         }
@@ -975,7 +1026,10 @@ function hostGoToRanking() {
 
     scored.sort((a, b) => b.raw - a.raw || a.time - b.time);
 
-    const top3 = scored.slice(0, 3).map((s, i) => ({ ...s, rank: i + 1, bonus: RANK_BONUS[i], total: s.raw + RANK_BONUS[i] }));
+    const top3 = scored.slice(0, 3).map((s, i) => {
+        const bonus = s.raw > 0 ? RANK_BONUS[i] : 0; // 0点の人には順位ボーナスを付けない
+        return { ...s, rank: i + 1, bonus, total: s.raw + bonus };
+    });
     const rest = scored.slice(3);
     const restRanked = [];
     let i = 0;
@@ -1177,6 +1231,10 @@ function handlePlayerMessage(data) {
         document.getElementById('player-rule-content').innerHTML = data.ruleText || '';
         document.getElementById('player-rule-img').innerHTML = data.ruleImg ? `<img src="${data.ruleImg}">` : '';
         showPage('player-rule');
+    } else if (data.type === 'close_answer') {
+        mySubmitted = true;
+        document.getElementById('player-wait-msg').innerText = '解答受付を終了しました。ホストの画面をご覧ください。';
+        showPage('player-wait');
     }
 }
 
