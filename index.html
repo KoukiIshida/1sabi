@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>歌詞当てクイズ</title>
+<title>１サビチキンレースクイズ</title>
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
@@ -65,7 +65,7 @@
 
 <!-- =============== 管理者画面 =============== -->
 <div id="admin-page" class="page">
-    <h1>歌詞当てクイズ 管理者画面</h1>
+    <h1>１サビチキンレースクイズ 管理者画面</h1>
 
     <h3>ルール説明の登録</h3>
     <div class="wysiwyg-toolbar">
@@ -98,7 +98,7 @@
 
 <!-- =============== ホスト: QR待機画面 =============== -->
 <div id="host-qr" class="page">
-    <h1>歌詞当てクイズ 参加者募集</h1>
+    <h1>１サビチキンレースクイズ 参加者募集</h1>
     <div class="qr-wrap"><div id="qr-container"></div></div>
     <p style="text-align:center; font-weight:bold;"><a id="join-url" href="#" target="_blank"></a></p>
     <div style="text-align:center;">
@@ -182,7 +182,7 @@
 
 <!-- =============== 参加者: エントリー =============== -->
 <div id="player-entry" class="page">
-    <h2>歌詞当てクイズに参加</h2>
+    <h2>１サビチキンレースクイズに参加</h2>
     <p style="text-align:center;">ニックネームを入力してください。</p>
     <input type="text" id="player-name-input" placeholder="ニックネーム" style="width:100%; font-size:18px; text-align:center;">
     <button onclick="joinGame()" style="width:100%; font-size:18px; padding:12px;">参加する</button>
@@ -270,7 +270,6 @@ function createEmptyQuestion() {
         correct: [],
         lyricsText: '',
         audio: null,
-        startOffsetMs: 0,
         endOffsetMs: 0,
         include: true, done: false
     };
@@ -364,15 +363,23 @@ function renderAdminPage() {
     updateAdminConfirmList();
 }
 
+function parseTitleArtist(value) {
+    const parts = (value || '').split(',');
+    return { title: (parts[0] || '').trim(), artist: parts.slice(1).join(',').trim() };
+}
+
 function updateAdminConfirmList() {
     const list = document.getElementById('admin-confirm-list');
     if (!list) return;
     const included = appData.questions
-        .map((q, idx) => ({
-            include: document.getElementById(`q-include-${idx}`)?.checked ?? q.include,
-            title: document.getElementById(`q-title-${idx}`)?.value ?? q.title,
-            artist: document.getElementById(`q-artist-${idx}`)?.value ?? q.artist
-        }))
+        .map((q, idx) => {
+            const taEl = document.getElementById(`q-title-artist-${idx}`);
+            const ta = taEl ? parseTitleArtist(taEl.value) : { title: q.title, artist: q.artist };
+            return {
+                include: document.getElementById(`q-include-${idx}`)?.checked ?? q.include,
+                title: ta.title, artist: ta.artist
+            };
+        })
         .filter(item => item.include);
     if (!included.length) {
         list.innerHTML = '<p style="color:var(--ng);">現在「出題する」にチェックされている問題がありません。</p>';
@@ -412,22 +419,19 @@ function buildQuestionBlock(q, idx) {
     body.className = 'q-body';
 
     body.innerHTML = `
-        <label class="field-label">曲名
-            <input type="text" id="q-title-${idx}" value="${escAttr(q.title)}" style="width:100%;" oninput="updateAdminConfirmList()">
-        </label>
-        <label class="field-label">アーティスト
-            <input type="text" id="q-artist-${idx}" value="${escAttr(q.artist)}" style="width:100%;" oninput="updateAdminConfirmList()">
+        <label class="field-label">曲名,アーティスト（カンマ区切りで入力。例: Lemon,米津玄師）
+            <input type="text" id="q-title-artist-${idx}" value="${escAttr([q.title, q.artist].filter(Boolean).join(','))}" style="width:100%;" oninput="updateAdminConfirmList()">
         </label>
 
-        <label class="field-label">9個の選択肢（カンマ区切りで入力。例: 夢,光,ホコリ,雨,幸せ,レモン,過去,暗闇,涙）
+        <label class="field-label">9個の選択肢（カンマ区切りで入力）
             <input type="text" id="q-choices-${idx}" value="${escAttr((q.choices || []).join(','))}" style="width:100%;">
         </label>
-        <label class="field-label">正解（カンマ区切りで入力。上の選択肢と同じ表記にしてください。例: 光,雨,レモン）
+        <label class="field-label">正解（カンマ区切りで入力）
             <input type="text" id="q-correct-${idx}" value="${escAttr((q.correct || []).map(i => q.choices[i]).filter(Boolean).join(','))}" style="width:100%;">
         </label>
         <div id="q-correct-warn-${idx}" style="color:var(--ng); font-size:13px;"></div>
 
-        <label class="field-label">歌詞（正解の単語がこの中に含まれている必要があります）
+        <label class="field-label">歌詞（正解の単語がこの中に含まれている必要があります。間を空けたい位置に (秒数) と入れると、その位置で指定秒数だけ待ちます。例: 冒頭を5秒空けたい場合は先頭に (5) と入力）
             <textarea id="q-lyrics-${idx}" rows="5">${escHtml(q.lyricsText)}</textarea>
         </label>
 
@@ -436,13 +440,10 @@ function buildQuestionBlock(q, idx) {
             <span id="q-audio-status-${idx}">${q.audio ? '✓ 登録済み' : '未登録'}</span>
         </label>
 
-        <label class="field-label">1文字目が表示されるタイミング（音源再生開始から何秒後か）
-            <input type="number" id="q-startoffset-${idx}" value="${((q.startOffsetMs || 0) / 1000)}" min="0" max="120" step="0.1" style="width:100px;">秒後
-        </label>
         <label class="field-label">歌詞の最後が表示され終わるタイミング（音源終了の何秒前か）
             <input type="number" id="q-endoffset-${idx}" value="${((q.endOffsetMs || 0) / 1000)}" min="0" max="120" step="0.1" style="width:100px;">秒前
         </label>
-        <p><small class="dim">上記2つの設定と歌詞の文字数から、表示速度が自動で決まります。</small></p>
+        <p><small class="dim">上記の設定と歌詞の文字数・(秒数)による間の長さから、表示速度が自動で決まります。</small></p>
         <button type="button" onclick="testPlayQuestion(${idx})">▶ テスト再生</button>
         <div id="q-test-preview-${idx}"></div>
 
@@ -480,14 +481,14 @@ function moveQuestion(idx, dir) {
 
 function syncQuestionFromForm(idx) {
     const q = appData.questions[idx];
-    const titleEl = document.getElementById(`q-title-${idx}`);
-    if (!titleEl) return;
-    q.title = titleEl.value;
-    q.artist = document.getElementById(`q-artist-${idx}`).value;
+    const titleArtistEl = document.getElementById(`q-title-artist-${idx}`);
+    if (!titleArtistEl) return;
+    const ta = parseTitleArtist(titleArtistEl.value);
+    q.title = ta.title;
+    q.artist = ta.artist;
     q.lyricsText = document.getElementById(`q-lyrics-${idx}`).value;
     q.include = document.getElementById(`q-include-${idx}`).checked;
     q.done = document.getElementById(`q-done-${idx}`).checked;
-    q.startOffsetMs = Math.round((parseFloat(document.getElementById(`q-startoffset-${idx}`).value) || 0) * 1000);
     q.endOffsetMs = Math.round((parseFloat(document.getElementById(`q-endoffset-${idx}`).value) || 0) * 1000);
 
     q.choices = document.getElementById(`q-choices-${idx}`).value.split(',').map(s => s.trim()).filter(s => s.length > 0);
@@ -527,9 +528,25 @@ async function saveAllData() {
 /** ========================================================
  * 歌詞出現アニメーション（管理画面テスト再生 / 本番共通）
  * ======================================================== */
+// 歌詞テキストを「表示文字」と「(秒数)による間」のトークン列に分解する
+function parseLyricsTokens(text) {
+    const tokens = []; // {type:'char', ch} | {type:'pause', ms}
+    const regex = /\((\d+(?:\.\d+)?)\)/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        Array.from(text.slice(lastIndex, match.index)).forEach(ch => tokens.push({ type: 'char', ch }));
+        tokens.push({ type: 'pause', ms: parseFloat(match[1]) * 1000 });
+        lastIndex = match.index + match[0].length;
+    }
+    Array.from(text.slice(lastIndex)).forEach(ch => tokens.push({ type: 'char', ch }));
+    return tokens;
+}
+
 function buildLyricCharMeta(q) {
-    const text = q.lyricsText || '';
-    const chars = Array.from(text);
+    const tokens = parseLyricsTokens(q.lyricsText || '');
+    const chars = tokens.filter(t => t.type === 'char').map(t => t.ch); // (秒数)マーカーを除いた表示文字
+    const displayText = chars.join('');
     const isCorrect = new Array(chars.length).fill(false);
     const ranges = []; // {choiceIdx, endCharIndex} - 表示完了する文字位置（速度が決まってから時刻に変換する）
     q.correct.forEach(choiceIdx => {
@@ -537,7 +554,7 @@ function buildLyricCharMeta(q) {
         if (!word) return;
         let searchFrom = 0;
         while (true) {
-            const foundAt = text.indexOf(word, searchFrom);
+            const foundAt = displayText.indexOf(word, searchFrom);
             if (foundAt === -1) break;
             const wordChars = Array.from(word).length;
             for (let i = foundAt; i < foundAt + wordChars; i++) isCorrect[i] = true;
@@ -545,18 +562,36 @@ function buildLyricCharMeta(q) {
             searchFrom = foundAt + word.length;
         }
     });
-    return { chars, isCorrect, ranges, msPerChar: 0, events: [] };
+    const totalPauseMs = tokens.filter(t => t.type === 'pause').reduce((sum, t) => sum + t.ms, 0);
+    return { tokens, chars, isCorrect, ranges, totalPauseMs, msPerChar: 0, events: [], charRevealTime: [] };
 }
 
-// 音源の長さが分かった時点で「1文字目のタイミング」〜「音源終了の何秒前に歌詞が出終わるか」から表示速度を逆算する
+// 音源の長さが分かった時点で「歌詞が音源終了の何秒前に出終わるか」と(秒数)による間の合計から表示速度を逆算する
 function resolvePlaybackTiming(q, meta, audioDurationMs) {
-    const availableMs = Math.max(0, audioDurationMs - (q.startOffsetMs || 0) - (q.endOffsetMs || 0));
+    const availableMs = Math.max(0, audioDurationMs - (q.endOffsetMs || 0));
     const charCount = meta.chars.length;
-    const msPerChar = charCount > 0 ? availableMs / charCount : 0;
+    const usableForChars = Math.max(0, availableMs - meta.totalPauseMs);
+    const msPerChar = charCount > 0 ? usableForChars / charCount : 0;
+
+    const charRevealTime = new Array(charCount);
+    let timelineMs = 0;
+    let charIdx = 0;
+    meta.tokens.forEach(t => {
+        if (t.type === 'pause') {
+            timelineMs += t.ms;
+        } else {
+            timelineMs += msPerChar;
+            charRevealTime[charIdx] = timelineMs;
+            charIdx++;
+        }
+    });
+
     const events = meta.ranges
-        .map(r => ({ choiceIdx: r.choiceIdx, time: r.endCharIndex * msPerChar }))
+        .map(r => ({ choiceIdx: r.choiceIdx, time: charRevealTime[r.endCharIndex - 1] ?? 0 }))
         .sort((a, b) => a.time - b.time);
+
     meta.msPerChar = msPerChar;
+    meta.charRevealTime = charRevealTime;
     meta.events = events;
 }
 
@@ -571,21 +606,22 @@ function renderLyricSpans(container, chars) {
     });
 }
 
-function startLyricPlayback(container, audioEl, meta, startOffsetMs, onHighlight, onEnded) {
+function startLyricPlayback(container, audioEl, meta, onHighlight, onEnded) {
     const spans = container.querySelectorAll('.ch');
     let eventPtr = 0;
+    let charPtr = 0;
     let raf = null;
     function tick() {
-        const adjustedMs = audioEl.currentTime * 1000 - (startOffsetMs || 0);
-        const visibleCount = adjustedMs <= 0 ? 0 : Math.min(meta.chars.length, Math.floor(adjustedMs / (meta.msPerChar || 1)));
-        for (let i = 0; i < visibleCount; i++) {
-            const span = spans[i];
-            if (span.classList.contains('hidden')) {
+        const elapsedMs = audioEl.currentTime * 1000;
+        while (charPtr < meta.chars.length && meta.charRevealTime[charPtr] <= elapsedMs) {
+            const span = spans[charPtr];
+            if (span && span.classList.contains('hidden')) {
                 span.classList.remove('hidden');
-                if (meta.isCorrect[i]) span.classList.add('correct');
+                if (meta.isCorrect[charPtr]) span.classList.add('correct');
             }
+            charPtr++;
         }
-        while (eventPtr < meta.events.length && meta.events[eventPtr].time <= adjustedMs) {
+        while (eventPtr < meta.events.length && meta.events[eventPtr].time <= elapsedMs) {
             if (onHighlight) onHighlight(meta.events[eventPtr].choiceIdx);
             eventPtr++;
         }
@@ -627,7 +663,7 @@ function testPlayQuestion(idx) {
     audioEl.addEventListener('loadedmetadata', () => {
         if (currentTestAudio !== audioEl) return; // 別の再生に切り替わっていたら無視
         resolvePlaybackTiming(q, meta, audioEl.duration * 1000);
-        startLyricPlayback(box, audioEl, meta, q.startOffsetMs, null, null);
+        startLyricPlayback(box, audioEl, meta, null, null);
     }, { once: true });
 }
 
@@ -899,7 +935,7 @@ function playRevealAudio() {
 
 function startRevealPlayback() {
     const box = document.getElementById('hr-lyric-box');
-    startLyricPlayback(box, revealAudioEl, currentQMeta, currentQ.startOffsetMs,
+    startLyricPlayback(box, revealAudioEl, currentQMeta,
         (choiceIdx) => {
             revealOrder.forEach(({ key, p }) => {
                 if (p.selected.includes(choiceIdx)) {
