@@ -64,7 +64,7 @@
         0%, 100% { box-shadow:0 0 22px 7px gold, 0 0 38px 10px #f472b6; border-color:gold; background:linear-gradient(135deg,#fff7d6,#ffe9f7); }
         50% { box-shadow:none; border-color:#cbd5e1; background:#fafafa; }
     }
-    .p-tile.perfect-flash { animation: flash-perfect 0.25s ease-in-out 6; }
+    .p-tile.perfect-flash { animation: flash-perfect 0.3s ease-in-out 4; }
     .status-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:bold; }
     .status-badge.done { background:#dcfce7; color:#166534; }
     .status-badge.pending { background:#fee2e2; color:#991b1b; }
@@ -436,6 +436,7 @@ function buildQuestionBlock(q, idx) {
         <label class="field-label">9個の選択肢（カンマ区切りで入力）
             <input type="text" id="q-choices-${idx}" value="${escAttr((q.choices || []).join(','))}" style="width:100%;">
         </label>
+        <div id="q-choices-warn-${idx}" style="color:var(--ng); font-size:13px;"></div>
         <label class="field-label">正解（カンマ区切りで入力）
             <input type="text" id="q-correct-${idx}" value="${escAttr((q.correct || []).map(i => q.choices[i]).filter(Boolean).join(','))}" style="width:100%;">
         </label>
@@ -489,10 +490,12 @@ function moveQuestion(idx, dir) {
     renderAdminPage();
 }
 
+const REQUIRED_CHOICE_COUNT = 9;
+
 function syncQuestionFromForm(idx) {
     const q = appData.questions[idx];
     const titleArtistEl = document.getElementById(`q-title-artist-${idx}`);
-    if (!titleArtistEl) return;
+    if (!titleArtistEl) return { choiceCountError: null, notInChoices: [], notInLyrics: [] };
     const ta = parseTitleArtist(titleArtistEl.value);
     q.title = ta.title;
     q.artist = ta.artist;
@@ -502,32 +505,53 @@ function syncQuestionFromForm(idx) {
     q.endOffsetMs = Math.round((parseFloat(document.getElementById(`q-endoffset-${idx}`).value) || 0) * 1000);
 
     q.choices = document.getElementById(`q-choices-${idx}`).value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+
+    let choiceCountError = null;
+    if (q.choices.length !== REQUIRED_CHOICE_COUNT) {
+        choiceCountError = `選択肢が${q.choices.length}個です（${REQUIRED_CHOICE_COUNT}個にしてください）`;
+    }
+    const choicesWarnEl = document.getElementById(`q-choices-warn-${idx}`);
+    if (choicesWarnEl) choicesWarnEl.innerText = choiceCountError ? `⚠ ${choiceCountError}` : '';
+
     const correctWords = document.getElementById(`q-correct-${idx}`).value.split(',').map(s => s.trim()).filter(s => s.length > 0);
-    const notFound = [];
+    const displayLyrics = stripPauseMarkers(q.lyricsText);
+    const notInChoices = [];
+    const notInLyrics = [];
     const correctSet = new Set();
     correctWords.forEach(w => {
         const foundIdx = q.choices.indexOf(w);
-        if (foundIdx === -1) notFound.push(w);
-        else correctSet.add(foundIdx);
+        if (foundIdx === -1) { notInChoices.push(w); return; }
+        correctSet.add(foundIdx);
+        if (!displayLyrics.includes(w)) notInLyrics.push(w);
     });
     q.correct = [...correctSet];
-    const warnEl = document.getElementById(`q-correct-warn-${idx}`);
-    if (warnEl) warnEl.innerText = notFound.length ? `⚠ 選択肢に見つからない正解: ${notFound.join('、')}` : '';
+
+    const correctWarnEl = document.getElementById(`q-correct-warn-${idx}`);
+    if (correctWarnEl) {
+        const msgs = [];
+        if (notInChoices.length) msgs.push(`選択肢に見つからない正解: ${notInChoices.join('、')}`);
+        if (notInLyrics.length) msgs.push(`歌詞に見つからない正解: ${notInLyrics.join('、')}`);
+        correctWarnEl.innerText = msgs.length ? '⚠ ' + msgs.join(' / ') : '';
+    }
 
     const audioFile = document.getElementById(`q-audio-${idx}`).files[0];
     if (audioFile) q.audio = audioFile;
-    return notFound;
+    return { choiceCountError, notInChoices, notInLyrics };
 }
 
 async function saveAllData() {
     appData.ruleText = document.getElementById('rule-editor').innerHTML;
     const problems = [];
     for (let idx = 0; idx < appData.questions.length; idx++) {
-        const notFound = syncQuestionFromForm(idx);
-        if (notFound.length) problems.push(`問${idx + 1}: ${notFound.join('、')}`);
+        const result = syncQuestionFromForm(idx);
+        const parts = [];
+        if (result.choiceCountError) parts.push(result.choiceCountError);
+        if (result.notInChoices.length) parts.push(`選択肢に見つからない正解: ${result.notInChoices.join('、')}`);
+        if (result.notInLyrics.length) parts.push(`歌詞に見つからない正解: ${result.notInLyrics.join('、')}`);
+        if (parts.length) problems.push(`問${idx + 1}: ${parts.join(' / ')}`);
     }
     if (problems.length) {
-        alert('以下の正解が選択肢に見つからないため反映されていません。選択肢の表記と正解の表記を確認してください。\n\n' + problems.join('\n'));
+        alert('以下の問題があるため保存できません。内容を確認してください。\n\n' + problems.join('\n'));
         return;
     }
     await saveToDB('lyricQuizMasterData', appData);
@@ -551,6 +575,11 @@ function parseLyricsTokens(text) {
     }
     Array.from(text.slice(lastIndex)).forEach(ch => tokens.push({ type: 'char', ch }));
     return tokens;
+}
+
+// (秒数)マーカーを除いた、実際に表示される歌詞テキストだけを取り出す
+function stripPauseMarkers(text) {
+    return (text || '').replace(/\((\d+(?:\.\d+)?)\)/g, '');
 }
 
 function buildLyricCharMeta(q) {
@@ -884,13 +913,13 @@ function updateSubmitStatusUI() {
     const el = document.getElementById('hq-submit-status');
     if (!el) return;
     if (answerRoundClosed) {
-        el.innerHTML = `<span style="color:var(--ng);">🔒 解答受付を締め切りました (${submitted}/${total})</span>`;
+        el.innerHTML = `<span style="color:var(--ng);">🔒 解答受付を締め切りました</span>`;
     } else if (!answerRoundActive) {
         el.innerText = '（解答開始前）';
     } else if (total > 0 && submitted >= total) {
-        el.innerHTML = `<span style="color:var(--ok);">✅ 全員提出済み (${submitted}/${total})</span>`;
+        el.innerHTML = `<span style="color:var(--ok);">✅ 全員提出済み</span>`;
     } else {
-        el.innerText = `提出状況: ${submitted} / ${total} 人`;
+        el.innerText = ''; // 解答受付中は個別の提出状況を表示しない（未提出者確認ボタンで確認）
     }
 }
 
