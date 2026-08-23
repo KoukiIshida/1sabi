@@ -153,8 +153,8 @@
     <div style="text-align:center;">
         <div id="hq-countdown" style="font-size:32px; font-weight:900; color:#ec4899; margin-bottom:8px;"></div>
         <div id="hq-submit-status" style="font-size:18px; font-weight:bold; margin-bottom:10px;"></div>
+        <button class="secondary" onclick="playIntroAudio()">🎵 曲再生</button>
         <button id="btn-start-answer" onclick="hostStartAnswer()" style="font-size:20px; padding:14px 30px;">解答開始</button>
-        <button id="btn-close-answer" class="secondary" onclick="hostCloseAnswer()" disabled>解答締切</button>
         <button class="secondary" onclick="hostShowUnsubmitted()">未提出者確認</button>
         <button onclick="hostGoToReveal()" style="background:#ec4899;">解答確認・正解発表へ</button>
     </div>
@@ -215,6 +215,7 @@
 <!-- =============== 参加者: 解答 =============== -->
 <div id="player-answer" class="page">
     <h2>歌詞に登場する単語をすべて選んでください</h2>
+    <div id="player-countdown" style="text-align:center; font-size:20px; font-weight:bold; margin-bottom:10px;"></div>
     <div class="choice-grid" id="player-choice-grid"></div>
     <button id="btn-decide" onclick="decideAnswer()" style="width:100%; font-size:20px; padding:14px;">解答決定</button>
 </div>
@@ -280,6 +281,7 @@ function createEmptyQuestion() {
         correct: [],
         lyricsText: '',
         audio: null,
+        introAudio: null,
         endOffsetMs: 0,
         include: true, done: false
     };
@@ -433,6 +435,11 @@ function buildQuestionBlock(q, idx) {
             <input type="text" id="q-title-artist-${idx}" value="${escAttr([q.title, q.artist].filter(Boolean).join(','))}" style="width:100%;" oninput="updateAdminConfirmList()">
         </label>
 
+        <label class="field-label">イントロ音源ファイル（任意。ホストの「曲再生」ボタンで再生されます。mp4動画ファイルを選んだ場合も音声のみ使用されます）
+            <input type="file" id="q-intro-audio-${idx}" accept="audio/*,video/mp4,video/*">
+            <span id="q-intro-audio-status-${idx}">${q.introAudio ? '✓ 登録済み' : '未登録'}</span>
+        </label>
+
         <label class="field-label">9個の選択肢（カンマ区切りで入力）
             <input type="text" id="q-choices-${idx}" value="${escAttr((q.choices || []).join(','))}" style="width:100%;">
         </label>
@@ -495,7 +502,7 @@ const REQUIRED_CHOICE_COUNT = 9;
 function syncQuestionFromForm(idx) {
     const q = appData.questions[idx];
     const titleArtistEl = document.getElementById(`q-title-artist-${idx}`);
-    if (!titleArtistEl) return { choiceCountError: null, notInChoices: [], notInLyrics: [] };
+    if (!titleArtistEl) return { choiceCountError: null, notInChoices: [], notInLyrics: [], missing: [] };
     const ta = parseTitleArtist(titleArtistEl.value);
     q.title = ta.title;
     q.artist = ta.artist;
@@ -536,7 +543,17 @@ function syncQuestionFromForm(idx) {
 
     const audioFile = document.getElementById(`q-audio-${idx}`).files[0];
     if (audioFile) q.audio = audioFile;
-    return { choiceCountError, notInChoices, notInLyrics };
+    const introAudioFile = document.getElementById(`q-intro-audio-${idx}`).files[0];
+    if (introAudioFile) q.introAudio = introAudioFile;
+
+    const missing = [];
+    if (!q.title) missing.push('曲名');
+    if (!q.artist) missing.push('アーティスト');
+    if (!q.lyricsText.trim()) missing.push('歌詞');
+    if (!q.audio) missing.push('音源ファイル');
+    if (q.correct.length === 0) missing.push('正解');
+
+    return { choiceCountError, notInChoices, notInLyrics, missing };
 }
 
 async function saveAllData() {
@@ -545,6 +562,7 @@ async function saveAllData() {
     for (let idx = 0; idx < appData.questions.length; idx++) {
         const result = syncQuestionFromForm(idx);
         const parts = [];
+        if (result.missing.length) parts.push(`未入力: ${result.missing.join('、')}`);
         if (result.choiceCountError) parts.push(result.choiceCountError);
         if (result.notInChoices.length) parts.push(`選択肢に見つからない正解: ${result.notInChoices.join('、')}`);
         if (result.notInLyrics.length) parts.push(`歌詞に見つからない正解: ${result.notInLyrics.join('、')}`);
@@ -724,7 +742,10 @@ let answerRoundClosed = false;
 let answerRoundStartTime = 0;
 let countdownInterval = null;
 let countdownRemaining = 0;
+let countdownPhase = 'main'; // 'main' | 'grace'
 const ANSWER_TIME_LIMIT_SEC = 45;
+const ANSWER_GRACE_SEC = 5;
+const ANSWER_WARN_SEC = 10;
 let revealOrder = [];
 let currentQMeta = null;
 let currentQ = null;
@@ -854,6 +875,20 @@ function toggleVolumeCheck() {
 }
 
 /** ========================================================
+ * イントロ音源再生（ホスト画面）
+ * ======================================================== */
+let introAudioEl = null;
+function playIntroAudio() {
+    if (introAudioEl) { introAudioEl.pause(); introAudioEl = null; }
+    if (!currentQ || !currentQ.introAudio) { alert('この問題にはイントロ音源が登録されていません。'); return; }
+    introAudioEl = new Audio(URL.createObjectURL(currentQ.introAudio));
+    introAudioEl.play();
+}
+function stopIntroAudio() {
+    if (introAudioEl) { introAudioEl.pause(); introAudioEl = null; }
+}
+
+/** ========================================================
  * ゲーム進行
  * ======================================================== */
 function goToAdminFromHost() {
@@ -898,8 +933,8 @@ function setupQuestion(idx) {
     document.getElementById('hq-title').innerText = currentQ.title || '(無題)';
     document.getElementById('hq-artist').innerText = currentQ.artist || '';
     document.getElementById('btn-start-answer').disabled = false;
-    document.getElementById('btn-close-answer').disabled = true;
     stopCountdown();
+    stopIntroAudio();
     document.getElementById('hq-countdown').innerText = '';
     updateSubmitStatusUI();
     showPage('host-question');
@@ -927,22 +962,31 @@ function hostStartAnswer() {
     answerRoundActive = true;
     answerRoundStartTime = performance.now();
     Object.values(playersData).forEach(p => { p.submitted = false; p.selected = []; p.answerTimeMs = null; });
-    broadcast('start_answer', { choices: currentQ.choices });
+    broadcast('start_answer', { choices: currentQ.choices, timeLimitSec: ANSWER_TIME_LIMIT_SEC, graceSec: ANSWER_GRACE_SEC, warnSec: ANSWER_WARN_SEC });
     document.getElementById('btn-start-answer').disabled = true;
-    document.getElementById('btn-close-answer').disabled = false;
-    startCountdown(ANSWER_TIME_LIMIT_SEC);
+    startCountdown();
     updateSubmitStatusUI();
 }
 
-function startCountdown(seconds) {
+function startCountdown() {
     stopCountdown();
-    countdownRemaining = seconds;
+    countdownPhase = 'main';
+    countdownRemaining = ANSWER_TIME_LIMIT_SEC;
     updateCountdownUI();
-    countdownInterval = setInterval(() => {
-        countdownRemaining--;
+    countdownInterval = setInterval(tickCountdown, 1000);
+}
+
+function tickCountdown() {
+    countdownRemaining--;
+    if (countdownRemaining > 0) { updateCountdownUI(); return; }
+    if (countdownPhase === 'main') {
+        countdownPhase = 'grace';
+        countdownRemaining = ANSWER_GRACE_SEC;
         updateCountdownUI();
-        if (countdownRemaining <= 0) stopCountdown(); // 表示のみ。自動処理は行わない
-    }, 1000);
+        return;
+    }
+    stopCountdown();
+    autoCloseAnswer();
 }
 
 function stopCountdown() {
@@ -953,16 +997,21 @@ function updateCountdownUI() {
     const el = document.getElementById('hq-countdown');
     if (!el) return;
     const remain = Math.max(0, countdownRemaining);
-    const m = Math.floor(remain / 60);
-    const s = remain % 60;
-    el.innerText = `残り時間 ${m}:${String(s).padStart(2, '0')}`;
+    if (countdownPhase === 'grace') {
+        el.innerHTML = `<span style="color:var(--ng);">⏰ まもなく締め切ります（あと${remain}秒）</span>`;
+    } else if (remain <= ANSWER_WARN_SEC) {
+        el.innerHTML = `<span style="color:var(--ng);">⚠ 残り時間 0:${String(remain).padStart(2, '0')}</span>`;
+    } else {
+        const m = Math.floor(remain / 60);
+        const s = remain % 60;
+        el.innerText = `残り時間 ${m}:${String(s).padStart(2, '0')}`;
+    }
 }
 
-function hostCloseAnswer() {
+function autoCloseAnswer() {
     answerRoundActive = false;
     answerRoundClosed = true;
-    stopCountdown();
-    document.getElementById('btn-close-answer').disabled = true;
+    document.getElementById('hq-countdown').innerText = '';
     broadcast('close_answer', {});
     updateSubmitStatusUI();
 }
@@ -1273,14 +1322,60 @@ function handlePlayerMessage(data) {
         mySubmitted = false;
         renderPlayerChoices(data.choices);
         showPage('player-answer');
+        startPlayerCountdown(data.timeLimitSec, data.graceSec, data.warnSec);
     } else if (data.type === 'show_rule') {
+        stopPlayerCountdown();
         document.getElementById('player-rule-content').innerHTML = data.ruleText || '';
         document.getElementById('player-rule-img').innerHTML = data.ruleImg ? `<img src="${data.ruleImg}">` : '';
         showPage('player-rule');
     } else if (data.type === 'close_answer') {
+        stopPlayerCountdown();
         mySubmitted = true;
         document.getElementById('player-wait-msg').innerText = '解答受付を終了しました。ホストの画面をご覧ください。';
         showPage('player-wait');
+    }
+}
+
+let playerCountdownInterval = null;
+
+function startPlayerCountdown(timeLimitSec, graceSec, warnSec) {
+    stopPlayerCountdown();
+    const limit = timeLimitSec || 45;
+    const grace = graceSec || 5;
+    const warn = warnSec || 10;
+    let phase = 'main';
+    let remaining = limit;
+    renderPlayerCountdownUI(phase, remaining, warn);
+    playerCountdownInterval = setInterval(() => {
+        remaining--;
+        if (remaining > 0) { renderPlayerCountdownUI(phase, remaining, warn); return; }
+        if (phase === 'main') {
+            phase = 'grace';
+            remaining = grace;
+            renderPlayerCountdownUI(phase, remaining, warn);
+            return;
+        }
+        stopPlayerCountdown();
+        renderPlayerCountdownUI('done', 0, warn);
+    }, 1000);
+}
+
+function stopPlayerCountdown() {
+    if (playerCountdownInterval) { clearInterval(playerCountdownInterval); playerCountdownInterval = null; }
+}
+
+function renderPlayerCountdownUI(phase, remaining, warnSec) {
+    const el = document.getElementById('player-countdown');
+    if (!el) return;
+    const remain = Math.max(0, remaining);
+    if (phase === 'grace') {
+        el.innerHTML = `<span style="color:var(--ng);">⏰ もうすぐ締め切ります（あと${remain}秒）</span>`;
+    } else if (phase === 'done') {
+        el.innerHTML = `<span style="color:var(--ng);">⏰ もうすぐ締め切ります</span>`;
+    } else if (remain <= warnSec) {
+        el.innerHTML = `<span style="color:var(--ng);">⚠ もうすぐ締め切りです（残り${remain}秒）</span>`;
+    } else {
+        el.innerText = `残り時間 ${remain}秒`;
     }
 }
 
@@ -1308,6 +1403,7 @@ function decideAnswer() {
     const msg = chosenTexts.length ? `選んだ単語:\n${chosenTexts.join(' / ')}\n\nこの内容で決定しますか？` : 'どれも選択していません。この内容で決定しますか？';
     if (!confirm(msg)) return;
     mySubmitted = true;
+    stopPlayerCountdown();
     if (myConnToHost) myConnToHost.send({ type: 'submit_answer', selected: mySelected });
     document.getElementById('player-wait-msg').innerText = '提出しました。ホストの画面をご覧ください。';
     showPage('player-wait');
