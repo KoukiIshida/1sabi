@@ -23,8 +23,9 @@
     input[type=text], input[type=number], textarea, select { padding:8px; border:2px solid #ccc; border-radius:6px; font-size:15px; font-family:inherit; }
     textarea { width:100%; resize:vertical; }
     .q-block { border:2px solid #cbd5e1; margin-bottom:14px; border-radius:10px; background:#f8fafc; overflow:hidden; }
-    .q-head { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:#e9e3f7; cursor:pointer; font-weight:bold; gap:8px; }
+    .q-head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; padding:10px 14px; background:#e9e3f7; cursor:pointer; font-weight:bold; gap:8px; }
     .q-head .q-head-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .q-head-checkbox { display:inline-flex; align-items:center; gap:3px; font-size:13px; font-weight:normal; white-space:nowrap; cursor:pointer; }
     .q-body { display:none; padding:16px; border-top:2px solid #cbd5e1; }
     .q-body.open { display:block; }
     .field-label { font-weight:bold; display:block; margin:10px 0 4px; }
@@ -86,6 +87,10 @@
     <h3>問題一覧</h3>
     <button onclick="addQuestion()">＋ 新しい問題を追加</button>
     <div id="questions-container"></div>
+
+    <h3>出題設定 最終確認（実際の出題順）</h3>
+    <p><small class="dim">「出題する」のチェックを変えるとこの一覧にすぐ反映されます。</small></p>
+    <div id="admin-confirm-list"></div>
 
     <hr><br>
     <button onclick="saveAllData()" style="width:100%; font-size:20px; padding:16px;">💾 保存してホスト画面へ</button>
@@ -265,8 +270,8 @@ function createEmptyQuestion() {
         correct: [],
         lyricsText: '',
         audio: null,
-        msPerChar: 180,
         startOffsetMs: 0,
+        endOffsetMs: 0,
         include: true, done: false
     };
 }
@@ -355,6 +360,30 @@ function renderAdminPage() {
     const container = document.getElementById('questions-container');
     container.innerHTML = '';
     appData.questions.forEach((q, idx) => container.appendChild(buildQuestionBlock(q, idx)));
+
+    updateAdminConfirmList();
+}
+
+function updateAdminConfirmList() {
+    const list = document.getElementById('admin-confirm-list');
+    if (!list) return;
+    const included = appData.questions
+        .map((q, idx) => ({
+            include: document.getElementById(`q-include-${idx}`)?.checked ?? q.include,
+            title: document.getElementById(`q-title-${idx}`)?.value ?? q.title,
+            artist: document.getElementById(`q-artist-${idx}`)?.value ?? q.artist
+        }))
+        .filter(item => item.include);
+    if (!included.length) {
+        list.innerHTML = '<p style="color:var(--ng);">現在「出題する」にチェックされている問題がありません。</p>';
+        return;
+    }
+    list.innerHTML = included.map((item, i) => `
+        <div class="rank-row">
+            <span>${i + 1}. ${item.title || '(無題)'} ${i === 0 ? '<strong style="color:#ec4899;">（例題・得点加算なし）</strong>' : ''}</span>
+            <span>${item.artist || ''}</span>
+        </div>
+    `).join('');
 }
 
 function buildQuestionBlock(q, idx) {
@@ -364,14 +393,19 @@ function buildQuestionBlock(q, idx) {
     const head = document.createElement('div');
     head.className = 'q-head';
     head.innerHTML = `
-        <span>🔼</span><span>🔽</span>
+        <button type="button" class="secondary q-move-up" style="padding:4px 8px; margin:0; font-size:14px;">🔼</button>
+        <button type="button" class="secondary q-move-down" style="padding:4px 8px; margin:0; font-size:14px;">🔽</button>
         <span class="q-head-title">問${idx + 1}: ${q.title || '未設定'}</span>
+        <label class="q-head-checkbox" onclick="event.stopPropagation()">
+            <input type="checkbox" id="q-include-${idx}" ${q.include ? 'checked' : ''} onchange="updateAdminConfirmList()"> 出題する
+        </label>
+        <label class="q-head-checkbox" onclick="event.stopPropagation()">
+            <input type="checkbox" id="q-done-${idx}" ${q.done ? 'checked' : ''}> 出題済み
+        </label>
         <span>▼開閉</span>
     `;
-    const [upBtn, downBtn, , toggleLabel] = head.children;
-    upBtn.style.cursor = 'pointer'; downBtn.style.cursor = 'pointer';
-    upBtn.onclick = (e) => { e.stopPropagation(); moveQuestion(idx, -1); };
-    downBtn.onclick = (e) => { e.stopPropagation(); moveQuestion(idx, 1); };
+    head.querySelector('.q-move-up').onclick = (e) => { e.stopPropagation(); moveQuestion(idx, -1); };
+    head.querySelector('.q-move-down').onclick = (e) => { e.stopPropagation(); moveQuestion(idx, 1); };
     head.onclick = () => body.classList.toggle('open');
 
     const body = document.createElement('div');
@@ -379,10 +413,10 @@ function buildQuestionBlock(q, idx) {
 
     body.innerHTML = `
         <label class="field-label">曲名
-            <input type="text" id="q-title-${idx}" value="${escAttr(q.title)}" style="width:100%;">
+            <input type="text" id="q-title-${idx}" value="${escAttr(q.title)}" style="width:100%;" oninput="updateAdminConfirmList()">
         </label>
         <label class="field-label">アーティスト
-            <input type="text" id="q-artist-${idx}" value="${escAttr(q.artist)}" style="width:100%;">
+            <input type="text" id="q-artist-${idx}" value="${escAttr(q.artist)}" style="width:100%;" oninput="updateAdminConfirmList()">
         </label>
 
         <label class="field-label">9個の選択肢（カンマ区切りで入力。例: 夢,光,ホコリ,雨,幸せ,レモン,過去,暗闇,涙）
@@ -402,19 +436,17 @@ function buildQuestionBlock(q, idx) {
             <span id="q-audio-status-${idx}">${q.audio ? '✓ 登録済み' : '未登録'}</span>
         </label>
 
-        <label class="field-label">歌詞の表示速度（1文字あたり ms。小さいほど速い）
-            <input type="number" id="q-speed-${idx}" value="${q.msPerChar}" min="30" max="1000" step="10" style="width:100px;">
-        </label>
         <label class="field-label">1文字目が表示されるタイミング（音源再生開始から何秒後か）
-            <input type="number" id="q-startoffset-${idx}" value="${((q.startOffsetMs || 0) / 1000)}" min="0" max="120" step="0.1" style="width:100px;">秒
+            <input type="number" id="q-startoffset-${idx}" value="${((q.startOffsetMs || 0) / 1000)}" min="0" max="120" step="0.1" style="width:100px;">秒後
         </label>
+        <label class="field-label">歌詞の最後が表示され終わるタイミング（音源終了の何秒前か）
+            <input type="number" id="q-endoffset-${idx}" value="${((q.endOffsetMs || 0) / 1000)}" min="0" max="120" step="0.1" style="width:100px;">秒前
+        </label>
+        <p><small class="dim">上記2つの設定と歌詞の文字数から、表示速度が自動で決まります。</small></p>
         <button type="button" onclick="testPlayQuestion(${idx})">▶ テスト再生</button>
         <div id="q-test-preview-${idx}"></div>
 
         <hr style="border-style:dashed; margin:14px 0;">
-        <label><input type="checkbox" id="q-include-${idx}" ${q.include ? 'checked' : ''}> 出題する</label>
-        &nbsp;&nbsp;
-        <label><input type="checkbox" id="q-done-${idx}" ${q.done ? 'checked' : ''}> 出題済み</label>
         <button class="danger" style="float:right;" onclick="removeQuestion(${idx})">この問題を削除</button>
     `;
 
@@ -453,10 +485,10 @@ function syncQuestionFromForm(idx) {
     q.title = titleEl.value;
     q.artist = document.getElementById(`q-artist-${idx}`).value;
     q.lyricsText = document.getElementById(`q-lyrics-${idx}`).value;
-    q.msPerChar = parseInt(document.getElementById(`q-speed-${idx}`).value) || 180;
     q.include = document.getElementById(`q-include-${idx}`).checked;
     q.done = document.getElementById(`q-done-${idx}`).checked;
     q.startOffsetMs = Math.round((parseFloat(document.getElementById(`q-startoffset-${idx}`).value) || 0) * 1000);
+    q.endOffsetMs = Math.round((parseFloat(document.getElementById(`q-endoffset-${idx}`).value) || 0) * 1000);
 
     q.choices = document.getElementById(`q-choices-${idx}`).value.split(',').map(s => s.trim()).filter(s => s.length > 0);
     const correctWords = document.getElementById(`q-correct-${idx}`).value.split(',').map(s => s.trim()).filter(s => s.length > 0);
@@ -499,7 +531,7 @@ function buildLyricCharMeta(q) {
     const text = q.lyricsText || '';
     const chars = Array.from(text);
     const isCorrect = new Array(chars.length).fill(false);
-    const events = []; // {choiceIdx, time}
+    const ranges = []; // {choiceIdx, endCharIndex} - 表示完了する文字位置（速度が決まってから時刻に変換する）
     q.correct.forEach(choiceIdx => {
         const word = (q.choices[choiceIdx] || '').trim();
         if (!word) return;
@@ -509,13 +541,23 @@ function buildLyricCharMeta(q) {
             if (foundAt === -1) break;
             const wordChars = Array.from(word).length;
             for (let i = foundAt; i < foundAt + wordChars; i++) isCorrect[i] = true;
-            const endCharIndex = foundAt + wordChars; // 表示完了時点
-            events.push({ choiceIdx, time: endCharIndex * q.msPerChar });
+            ranges.push({ choiceIdx, endCharIndex: foundAt + wordChars });
             searchFrom = foundAt + word.length;
         }
     });
-    events.sort((a, b) => a.time - b.time);
-    return { chars, isCorrect, events };
+    return { chars, isCorrect, ranges, msPerChar: 0, events: [] };
+}
+
+// 音源の長さが分かった時点で「1文字目のタイミング」〜「音源終了の何秒前に歌詞が出終わるか」から表示速度を逆算する
+function resolvePlaybackTiming(q, meta, audioDurationMs) {
+    const availableMs = Math.max(0, audioDurationMs - (q.startOffsetMs || 0) - (q.endOffsetMs || 0));
+    const charCount = meta.chars.length;
+    const msPerChar = charCount > 0 ? availableMs / charCount : 0;
+    const events = meta.ranges
+        .map(r => ({ choiceIdx: r.choiceIdx, time: r.endCharIndex * msPerChar }))
+        .sort((a, b) => a.time - b.time);
+    meta.msPerChar = msPerChar;
+    meta.events = events;
 }
 
 function renderLyricSpans(container, chars) {
@@ -556,20 +598,37 @@ function startLyricPlayback(container, audioEl, meta, startOffsetMs, onHighlight
     audioEl.play();
 }
 
+let currentTestAudio = null;
+
+function stopTestPlayback() {
+    if (currentTestAudio) {
+        currentTestAudio.pause();
+        currentTestAudio = null;
+    }
+}
+
 function testPlayQuestion(idx) {
+    stopTestPlayback(); // 再生中のテスト再生があれば先に止める（二重再生防止）
     syncQuestionFromForm(idx);
     const q = appData.questions[idx];
     if (!q.audio) { alert('先に音源ファイルを登録してください。'); return; }
     const meta = buildLyricCharMeta(q);
-    meta.msPerChar = q.msPerChar;
 
     const previewHost = document.getElementById(`q-test-preview-${idx}`);
-    previewHost.innerHTML = `<div class="lyric-box" id="q-test-lyricbox-${idx}" style="margin-top:10px;"></div>`;
+    previewHost.innerHTML = `
+        <div class="lyric-box" id="q-test-lyricbox-${idx}" style="margin-top:10px;"></div>
+        <div style="text-align:center; margin-top:6px;"><button type="button" class="secondary" onclick="stopTestPlayback()">■ 停止</button></div>
+    `;
     const box = document.getElementById(`q-test-lyricbox-${idx}`);
     renderLyricSpans(box, meta.chars);
 
     const audioEl = new Audio(URL.createObjectURL(q.audio));
-    startLyricPlayback(box, audioEl, meta, q.startOffsetMs, null, null);
+    currentTestAudio = audioEl;
+    audioEl.addEventListener('loadedmetadata', () => {
+        if (currentTestAudio !== audioEl) return; // 別の再生に切り替わっていたら無視
+        resolvePlaybackTiming(q, meta, audioEl.duration * 1000);
+        startLyricPlayback(box, audioEl, meta, q.startOffsetMs, null, null);
+    }, { once: true });
 }
 
 /** ========================================================
@@ -799,7 +858,6 @@ let hrTileRefs = {}; // playerKey -> { choiceIdx: element }
 
 function hostGoToReveal() {
     currentQMeta = buildLyricCharMeta(currentQ);
-    currentQMeta.msPerChar = currentQ.msPerChar;
 
     const connected = Object.entries(playersData).filter(([, p]) => p.connId);
     revealOrder = connected.map(([key, p]) => ({ key, p }));
@@ -832,8 +890,15 @@ function hostGoToReveal() {
 function playRevealAudio() {
     document.getElementById('video-play-overlay').style.display = 'none';
     if (!currentQ.audio) { alert('音源が登録されていません。'); return; }
-    const box = document.getElementById('hr-lyric-box');
     revealAudioEl = new Audio(URL.createObjectURL(currentQ.audio));
+    revealAudioEl.addEventListener('loadedmetadata', () => {
+        resolvePlaybackTiming(currentQ, currentQMeta, revealAudioEl.duration * 1000);
+        startRevealPlayback();
+    }, { once: true });
+}
+
+function startRevealPlayback() {
+    const box = document.getElementById('hr-lyric-box');
     startLyricPlayback(box, revealAudioEl, currentQMeta, currentQ.startOffsetMs,
         (choiceIdx) => {
             revealOrder.forEach(({ key, p }) => {
