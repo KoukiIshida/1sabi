@@ -177,6 +177,7 @@
 <!-- =============== ホスト: 順位発表（各問） =============== -->
 <div id="host-rank" class="page">
     <h2>順位発表</h2>
+    <div id="hrank-correct-answers" style="text-align:center; font-size:18px; font-weight:bold; background:#f8fafc; border:2px solid var(--primary); border-radius:8px; padding:10px; margin-bottom:14px;"></div>
     <div id="hrank-example-note" style="display:none; text-align:center; color:#ec4899; font-weight:bold; margin-bottom:10px;">📝 例題のため得点は加算されません</div>
     <div id="hrank-top3"></div>
     <div id="hrank-rest"></div>
@@ -605,7 +606,7 @@ function buildLyricCharMeta(q) {
     const chars = tokens.filter(t => t.type === 'char').map(t => t.ch); // (秒数)マーカーを除いた表示文字
     const displayText = chars.join('');
     const isCorrect = new Array(chars.length).fill(false);
-    const ranges = []; // {choiceIdx, endCharIndex} - 表示完了する文字位置（速度が決まってから時刻に変換する）
+    const ranges = []; // {choiceIdx, startCharIndex, endCharIndex} - 文字位置（速度が決まってから時刻に変換する）
     q.correct.forEach(choiceIdx => {
         const word = (q.choices[choiceIdx] || '').trim();
         if (!word) return;
@@ -615,7 +616,7 @@ function buildLyricCharMeta(q) {
             if (foundAt === -1) break;
             const wordChars = Array.from(word).length;
             for (let i = foundAt; i < foundAt + wordChars; i++) isCorrect[i] = true;
-            ranges.push({ choiceIdx, endCharIndex: foundAt + wordChars });
+            ranges.push({ choiceIdx, startCharIndex: foundAt, endCharIndex: foundAt + wordChars });
             searchFrom = foundAt + word.length;
         }
     });
@@ -644,7 +645,7 @@ function resolvePlaybackTiming(q, meta, audioDurationMs) {
     });
 
     const events = meta.ranges
-        .map(r => ({ choiceIdx: r.choiceIdx, time: charRevealTime[r.endCharIndex - 1] ?? 0 }))
+        .map(r => ({ choiceIdx: r.choiceIdx, time: charRevealTime[r.startCharIndex] ?? 0 }))
         .sort((a, b) => a.time - b.time);
 
     meta.msPerChar = msPerChar;
@@ -1155,6 +1156,8 @@ function hostGoToRanking() {
 }
 
 function renderQuestionRanking(top3, restRanked, boundaryFlag, isExample) {
+    const correctWords = currentQ.correct.map(i => currentQ.choices[i]);
+    document.getElementById('hrank-correct-answers').innerText = `正解一覧（${correctWords.length}個）: ${correctWords.join('、')}`;
     document.getElementById('hrank-example-note').style.display = isExample ? 'block' : 'none';
     const top3Box = document.getElementById('hrank-top3');
     top3Box.innerHTML = '<h3>上位3名</h3>';
