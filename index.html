@@ -46,12 +46,25 @@
     .p-tile .chips { display:flex; flex-wrap:wrap; gap:3px; }
     .chip-mini { background:#e2e8f0; border-radius:8px; padding:1px 6px; font-size:11px; }
     .chip-mini.lit { background:#facc15; color:#000; box-shadow:0 0 8px 2px #f59e0b; }
-    .p-tile.all-correct { box-shadow:0 0 14px 4px var(--ok); border-color:var(--ok); background:#f0fdf4; }
-    @keyframes flash-all-correct {
+    /* 不正解を1つも選んでいない人（正解の一部だけでもOK） */
+    .p-tile.no-wrong { box-shadow:0 0 14px 4px var(--ok); border-color:var(--ok); background:#f0fdf4; }
+    @keyframes flash-no-wrong {
         0%, 100% { box-shadow:0 0 14px 4px var(--ok); border-color:var(--ok); background:#f0fdf4; }
         50% { box-shadow:none; border-color:#cbd5e1; background:#fafafa; }
     }
-    .p-tile.all-correct-flash { animation: flash-all-correct 0.3s ease-in-out 4; }
+    .p-tile.no-wrong-flash { animation: flash-no-wrong 0.3s ease-in-out 4; }
+
+    /* 正解を1つも漏らさず全部選んだ人（豪華演出） */
+    .p-tile.perfect { border-color:gold; background:linear-gradient(135deg,#fff7d6,#ffe9f7); animation: glow-perfect 1.1s ease-in-out infinite; }
+    @keyframes glow-perfect {
+        0%, 100% { box-shadow:0 0 16px 5px gold, 0 0 28px 8px #f472b6; }
+        50% { box-shadow:0 0 26px 9px gold, 0 0 44px 14px #f472b6; }
+    }
+    @keyframes flash-perfect {
+        0%, 100% { box-shadow:0 0 22px 7px gold, 0 0 38px 10px #f472b6; border-color:gold; background:linear-gradient(135deg,#fff7d6,#ffe9f7); }
+        50% { box-shadow:none; border-color:#cbd5e1; background:#fafafa; }
+    }
+    .p-tile.perfect-flash { animation: flash-perfect 0.25s ease-in-out 6; }
     .status-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:bold; }
     .status-badge.done { background:#dcfce7; color:#166534; }
     .status-badge.pending { background:#fee2e2; color:#991b1b; }
@@ -603,10 +616,11 @@ function renderLyricSpans(container, chars) {
     });
 }
 
-function startLyricPlayback(container, audioEl, meta, onHighlight, onEnded) {
+function startLyricPlayback(container, audioEl, meta, onHighlight, onAllRevealed) {
     const spans = container.querySelectorAll('.ch');
     let eventPtr = 0;
     let charPtr = 0;
+    let allRevealedFired = false;
     let raf = null;
     function tick() {
         const elapsedMs = audioEl.currentTime * 1000;
@@ -622,12 +636,15 @@ function startLyricPlayback(container, audioEl, meta, onHighlight, onEnded) {
             if (onHighlight) onHighlight(meta.events[eventPtr].choiceIdx);
             eventPtr++;
         }
+        if (!allRevealedFired && charPtr >= meta.chars.length) {
+            allRevealedFired = true;
+            if (onAllRevealed) onAllRevealed();
+        }
         if (!audioEl.paused && !audioEl.ended) {
             raf = requestAnimationFrame(tick);
         }
     }
     audioEl.addEventListener('play', () => { raf = requestAnimationFrame(tick); });
-    audioEl.addEventListener('ended', () => { if (onEnded) onEnded(); });
     audioEl.play();
 }
 
@@ -992,18 +1009,18 @@ function startRevealPlayback() {
         () => {
             const correctSet = currentQ.correct;
             revealOrder.forEach(({ key, p }) => {
-                const isAllCorrect = p.selected.length === correctSet.length &&
-                    p.selected.every(i => correctSet.includes(i));
-                if (isAllCorrect) {
-                    const tile = document.getElementById(`hr-tile-${key}`);
-                    if (tile) {
-                        tile.classList.add('all-correct-flash');
-                        tile.addEventListener('animationend', () => {
-                            tile.classList.remove('all-correct-flash');
-                            tile.classList.add('all-correct');
-                        }, { once: true });
-                    }
-                }
+                const noWrongPicks = p.selected.length > 0 && p.selected.every(i => correctSet.includes(i));
+                if (!noWrongPicks) return;
+                const isPerfect = p.selected.length === correctSet.length; // 正解を1つも漏らさず全部選んだ
+                const tile = document.getElementById(`hr-tile-${key}`);
+                if (!tile) return;
+                const flashClass = isPerfect ? 'perfect-flash' : 'no-wrong-flash';
+                const steadyClass = isPerfect ? 'perfect' : 'no-wrong';
+                tile.classList.add(flashClass);
+                tile.addEventListener('animationend', () => {
+                    tile.classList.remove(flashClass);
+                    tile.classList.add(steadyClass);
+                }, { once: true });
             });
         }
     );
