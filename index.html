@@ -26,6 +26,10 @@
     .q-head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; padding:10px 14px; background:#e9e3f7; cursor:pointer; font-weight:bold; gap:8px; }
     .q-head .q-head-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .q-head-checkbox { display:inline-flex; align-items:center; gap:3px; font-size:13px; font-weight:normal; white-space:nowrap; cursor:pointer; }
+    .q-drag-handle { cursor:grab; font-size:20px; padding:0 6px; user-select:none; color:#64748b; }
+    .q-drag-handle:active { cursor:grabbing; }
+    .q-block.dragging { opacity:0.4; }
+    .q-block.drag-over { border-color:var(--primary); border-style:dashed; border-width:3px; }
     .q-body { display:none; padding:16px; border-top:2px solid #cbd5e1; }
     .q-body.open { display:block; }
     .field-label { font-weight:bold; display:block; margin:10px 0 4px; }
@@ -101,6 +105,9 @@
     <p><small class="dim">ホストのQR待機画面で音量確認ボタンから再生されます。mp4動画ファイルを選んだ場合も音声のみが使われます（映像は表示されません）。</small></p>
     <input type="file" id="test-audio-upload" accept="audio/*,video/mp4,video/*">
     <span id="test-audio-status"></span>
+
+    <h3>解答タイマー設定</h3>
+    <label>解答時間（秒。全問共通）: <input type="number" id="answer-time-limit" min="5" max="600" step="1" style="width:100px;"></label>
 
     <h3>問題一覧</h3>
     <button onclick="addQuestion()">＋ 新しい問題を追加</button>
@@ -263,7 +270,7 @@ async function loadFromDB(key) {
 
 const RANK_BONUS = [5, 3, 1];
 
-let appData = { ruleText: '', ruleImg: null, testAudio: null, questions: [] };
+let appData = { ruleText: '', ruleImg: null, testAudio: null, answerTimeLimitSec: 45, questions: [] };
 
 function fileToBase64(file) {
     return new Promise((resolve, reject) => {
@@ -329,6 +336,7 @@ window.onload = async () => {
     if (!appData.questions) appData.questions = [];
     if (appData.ruleText === undefined) appData.ruleText = '';
     if (appData.ruleImg === undefined) appData.ruleImg = null;
+    if (!appData.answerTimeLimitSec) appData.answerTimeLimitSec = 45;
 
     requestWakeLock();
 
@@ -366,6 +374,8 @@ function renderAdminPage() {
         const f = e.target.files[0];
         if (f) { appData.testAudio = f; testStatus.innerText = '✓ 登録済み（未保存）'; }
     };
+
+    document.getElementById('answer-time-limit').value = appData.answerTimeLimitSec;
 
     if (!appData.questions.length) appData.questions.push(createEmptyQuestion());
 
@@ -413,6 +423,7 @@ function buildQuestionBlock(q, idx) {
     const head = document.createElement('div');
     head.className = 'q-head';
     head.innerHTML = `
+        <span class="q-drag-handle" draggable="true" title="ドラッグで並べ替え" onclick="event.stopPropagation()">⠿</span>
         <button type="button" class="secondary q-move-up" style="padding:4px 8px; margin:0; font-size:14px;">🔼</button>
         <button type="button" class="secondary q-move-down" style="padding:4px 8px; margin:0; font-size:14px;">🔽</button>
         <span class="q-head-title">問${idx + 1}: ${q.title || '未設定'}</span>
@@ -427,6 +438,26 @@ function buildQuestionBlock(q, idx) {
     head.querySelector('.q-move-up').onclick = (e) => { e.stopPropagation(); moveQuestion(idx, -1); };
     head.querySelector('.q-move-down').onclick = (e) => { e.stopPropagation(); moveQuestion(idx, 1); };
     head.onclick = () => body.classList.toggle('open');
+
+    const dragHandle = head.querySelector('.q-drag-handle');
+    dragHandle.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(idx));
+        div.classList.add('dragging');
+    });
+    dragHandle.addEventListener('dragend', () => div.classList.remove('dragging'));
+    div.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        div.classList.add('drag-over');
+    });
+    div.addEventListener('dragleave', () => div.classList.remove('drag-over'));
+    div.addEventListener('drop', (e) => {
+        e.preventDefault();
+        div.classList.remove('drag-over');
+        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+        if (!Number.isNaN(fromIdx)) moveQuestionTo(fromIdx, idx);
+    });
 
     const body = document.createElement('div');
     body.className = 'q-body';
@@ -491,11 +522,24 @@ function removeQuestion(idx) {
 function moveQuestion(idx, dir) {
     const target = idx + dir;
     if (target < 0 || target >= appData.questions.length) return;
-    syncQuestionFromForm(idx);
+    syncAllQuestionsFromForm();
     const tmp = appData.questions[idx];
     appData.questions[idx] = appData.questions[target];
     appData.questions[target] = tmp;
     renderAdminPage();
+}
+
+function moveQuestionTo(fromIdx, toIdx) {
+    if (fromIdx === toIdx) return;
+    syncAllQuestionsFromForm();
+    const [item] = appData.questions.splice(fromIdx, 1);
+    const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx;
+    appData.questions.splice(insertAt, 0, item);
+    renderAdminPage();
+}
+
+function syncAllQuestionsFromForm() {
+    for (let i = 0; i < appData.questions.length; i++) syncQuestionFromForm(i);
 }
 
 const REQUIRED_CHOICE_COUNT = 9;
@@ -559,6 +603,7 @@ function syncQuestionFromForm(idx) {
 
 async function saveAllData() {
     appData.ruleText = document.getElementById('rule-editor').innerHTML;
+    appData.answerTimeLimitSec = parseInt(document.getElementById('answer-time-limit').value) || 45;
     const problems = [];
     for (let idx = 0; idx < appData.questions.length; idx++) {
         const result = syncQuestionFromForm(idx);
@@ -744,7 +789,6 @@ let answerRoundStartTime = 0;
 let countdownInterval = null;
 let countdownRemaining = 0;
 let countdownPhase = 'main'; // 'main' | 'grace'
-const ANSWER_TIME_LIMIT_SEC = 45;
 const ANSWER_GRACE_SEC = 5;
 const ANSWER_WARN_SEC = 10;
 let revealOrder = [];
@@ -963,7 +1007,7 @@ function hostStartAnswer() {
     answerRoundActive = true;
     answerRoundStartTime = performance.now();
     Object.values(playersData).forEach(p => { p.submitted = false; p.selected = []; p.answerTimeMs = null; });
-    broadcast('start_answer', { choices: currentQ.choices, timeLimitSec: ANSWER_TIME_LIMIT_SEC, graceSec: ANSWER_GRACE_SEC, warnSec: ANSWER_WARN_SEC });
+    broadcast('start_answer', { choices: currentQ.choices, timeLimitSec: appData.answerTimeLimitSec, graceSec: ANSWER_GRACE_SEC, warnSec: ANSWER_WARN_SEC });
     document.getElementById('btn-start-answer').disabled = true;
     startCountdown();
     updateSubmitStatusUI();
@@ -972,7 +1016,7 @@ function hostStartAnswer() {
 function startCountdown() {
     stopCountdown();
     countdownPhase = 'main';
-    countdownRemaining = ANSWER_TIME_LIMIT_SEC;
+    countdownRemaining = appData.answerTimeLimitSec;
     updateCountdownUI();
     countdownInterval = setInterval(tickCountdown, 1000);
 }
